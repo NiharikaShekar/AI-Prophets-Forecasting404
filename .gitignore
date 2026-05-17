@@ -18,3 +18,4 @@ score_log_*.log
 live_predictions_*.json
 live_results_*.json
 eval_results.json
+.pip_packages/
