@@ -223,14 +223,19 @@ async def run_ensemble(
         model_b: text_b,
     }
 
-    # Evidence summary for the judge: Kalshi prior + category-specific data
+    # Evidence summary for the judge: full evidence the models saw
     if isinstance(kalshi_prior, float):
         prior_line = f"Kalshi market price: {kalshi_prior:.1%} YES"
     elif isinstance(kalshi_prior, dict):
         prior_line = "Kalshi prices: " + ", ".join(f"{k}: {v:.1%}" for k, v in kalshi_prior.items())
     else:
         prior_line = "Kalshi price: unavailable"
-    evidence_summary = f"{prior_line}\n\n{category_info}"
+    evidence_summary = (
+        f"{prior_line}\n\n"
+        f"Recent news (Tavily):\n{news[:2000]}\n\n"
+        f"Historical stats:\n{stats[:1000]}\n\n"
+        f"Category-specific data:\n{category_info[:1000]}"
+    )
 
     # --- Binary ---
     if event_type == "binary":
@@ -241,16 +246,25 @@ async def run_ensemble(
         judge_confidence = ""
 
         if p_a is not None and p_b is not None:
+            geo = _geo_mean_binary(p_a, p_b)
             judge_result = await judge_binary(
                 event, evidence_summary, p_a, text_a, p_b, text_b
             )
             if judge_result:
-                p_final = judge_result["final_p_yes"]
-                judge_critique = judge_result["critique"]
-                judge_confidence = judge_result["confidence"]
+                # If both models agree strongly, cap how far the judge can move us
+                agreement = abs(p_a - p_b) < 0.20
+                if agreement and judge_result["confidence"] == "Low":
+                    # Judge is uncertain but models agree — trust the models
+                    p_final = _extremize(geo)
+                    judge_critique = "[geo-mean used: judge low-confidence override rejected — models agreed] " + judge_result["critique"]
+                    judge_confidence = "Moderate"
+                else:
+                    p_final = judge_result["final_p_yes"]
+                    judge_critique = judge_result["critique"]
+                    judge_confidence = judge_result["confidence"]
             else:
                 # Judge failed — fall back to geometric mean + extremize
-                p_final = _extremize(_geo_mean_binary(p_a, p_b))
+                p_final = _extremize(geo)
         elif p_a is not None:
             p_final = p_a
         elif p_b is not None:
@@ -275,15 +289,27 @@ async def run_ensemble(
     judge_confidence = ""
 
     if probs_a and probs_b:
+        geo_multi = _geo_mean_multi(probs_a, probs_b, outcomes, multi_label)
+        # Check if both models agree on the top outcome
+        top_a = max(probs_a, key=lambda o: probs_a[o]) if probs_a else None
+        top_b = max(probs_b, key=lambda o: probs_b[o]) if probs_b else None
+        models_agree_top = top_a == top_b
+
         judge_result = await judge_multi(
             event, evidence_summary, probs_a, text_a, probs_b, text_b, outcomes, multi_label
         )
         if judge_result:
-            combined = judge_result["final_probabilities"]
-            judge_critique = judge_result["critique"]
-            judge_confidence = judge_result["confidence"]
+            if models_agree_top and judge_result["confidence"] == "Low":
+                # Both models picked the same winner but judge is uncertain — trust the models
+                combined = geo_multi
+                judge_critique = "[geo-mean used: judge low-confidence override rejected — models agreed on top outcome] " + judge_result["critique"]
+                judge_confidence = "Moderate"
+            else:
+                combined = judge_result["final_probabilities"]
+                judge_critique = judge_result["critique"]
+                judge_confidence = judge_result["confidence"]
         else:
-            combined = _geo_mean_multi(probs_a, probs_b, outcomes, multi_label)
+            combined = geo_multi
     elif probs_a:
         combined = probs_a
     elif probs_b:

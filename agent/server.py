@@ -40,6 +40,19 @@ async def health():
 def _finalize_response(event: dict, result: dict) -> dict:
     result["rationale"] = truncate_rationale(result.get("rationale", ""))
     classified = classify(event)
+    outcomes = event.get("outcomes") or []
+
+    # Convert binary p_yes → probabilities array (required by Prophet Arena API)
+    if "p_yes" in result and outcomes:
+        p_yes = float(result.pop("p_yes"))
+        p_no = round(1.0 - p_yes, 4)
+        result["probabilities"] = [
+            {"market": outcomes[0], "probability": round(p_yes, 4)},
+            {"market": outcomes[1], "probability": p_no},
+        ] if len(outcomes) >= 2 else [
+            {"market": outcomes[0], "probability": round(p_yes, 4)},
+        ]
+
     if "probabilities" in result:
         total = sum(p["probability"] for p in result["probabilities"])
         logger.info(
@@ -48,6 +61,7 @@ def _finalize_response(event: dict, result: dict) -> dict:
             total,
             event.get("market_ticker", ""),
         )
+
     return result
 
 
