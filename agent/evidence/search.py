@@ -1,7 +1,10 @@
 import asyncio
+import logging
 import os
 
 from tavily import AsyncTavilyClient
+
+logger = logging.getLogger(__name__)
 
 _CATEGORY_QUERIES: dict[str, str] = {
     "Elections": "{title} polling forecast prediction latest",
@@ -20,7 +23,10 @@ _CATEGORY_QUERIES: dict[str, str] = {
 
 
 def _client() -> AsyncTavilyClient:
-    return AsyncTavilyClient(api_key=os.environ.get("TAVILY_API_KEY", ""))
+    key = os.environ.get("TAVILY_API_KEY", "")
+    if not key:
+        raise RuntimeError("TAVILY_API_KEY not set")
+    return AsyncTavilyClient(api_key=key)
 
 
 def _format(results: list[dict]) -> str:
@@ -36,34 +42,49 @@ def _format(results: list[dict]) -> str:
 
 
 async def _search(query: str, days: int | None = None, max_results: int = 5) -> list[dict]:
+    if not query.strip():
+        return []
     try:
         kwargs: dict = {"query": query, "max_results": max_results, "search_depth": "basic"}
         if days is not None:
             kwargs["days"] = days
         resp = await _client().search(**kwargs)
-        return resp.get("results", [])
-    except Exception:
+        results = resp.get("results", [])
+        if not isinstance(results, list):
+            logger.warning("Tavily returned unexpected results type: %s", type(results))
+            return []
+        return results
+    except RuntimeError as exc:
+        logger.error("Tavily config error: %s", exc)
+        return []
+    except Exception as exc:
+        logger.warning("Tavily search failed for '%s': %s", query[:60], exc)
         return []
 
 
 async def search_recent_news(title: str) -> str:
+    if not title.strip():
+        return "No title provided."
     results = await _search(f"{title} news latest update", days=2, max_results=5)
     return _format(results)
 
 
 async def search_stats_history(title: str) -> str:
+    if not title.strip():
+        return "No title provided."
     results = await _search(f"{title} odds statistics history base rate", max_results=5)
     return _format(results)
 
 
 async def search_category(title: str, category: str) -> str:
+    if not title.strip():
+        return "No title provided."
     template = _CATEGORY_QUERIES.get(category)
     if template:
         query = template.replace("{title}", title)
         results = await _search(query, max_results=5)
         return _format(results)
 
-    # Unknown category: two parallel searches for broader coverage
     q1 = f"{title} {category} prediction expert analysis"
     q2 = f"{title} probability forecast outcome odds"
     r1, r2 = await asyncio.gather(_search(q1, max_results=3), _search(q2, max_results=3))
@@ -71,6 +92,8 @@ async def search_category(title: str, category: str) -> str:
 
 
 async def search_numeric(title: str) -> str:
+    if not title.strip():
+        return "No title provided."
     results = await _search(f"{title} result official count number", max_results=5)
     if not results:
         results = await _search(f"{title} final tally confirmed", max_results=5)
