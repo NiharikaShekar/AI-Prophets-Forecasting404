@@ -6,4 +6,5 @@ pydantic>=2.0
 openai>=1.30.0
 python-dotenv>=1.0.0
 ai-prophet-core>=0.1.5
+ai-prophet
 pytest>=8.0.0

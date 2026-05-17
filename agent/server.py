@@ -20,21 +20,24 @@ app = FastAPI(title="AI-Prophets Forecasting Agent", version="1.0.0")
 
 
 class EventRequest(BaseModel):
-    event_ticker: str
-    market_ticker: str
+    event_ticker: str = ""
+    market_ticker: str = ""
     title: str
     subtitle: str | None = None
     description: str | None = None
-    category: str
+    category: str = ""
     rules: str | None = None
-    close_time: str
-    outcomes: list[str] | None = None
+    close_time: str = ""
+    outcomes: list[str] = []
     resolved_outcome: Any = None
 
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+_INTERNAL_FIELDS = {"model_reasoning", "judge_critique", "judge_confidence", "evidence_quality"}
 
 
 def _finalize_response(event: dict, result: dict) -> dict:
@@ -61,6 +64,9 @@ def _finalize_response(event: dict, result: dict) -> dict:
             total,
             event.get("market_ticker", ""),
         )
+
+    for field in _INTERNAL_FIELDS:
+        result.pop(field, None)
 
     return result
 
