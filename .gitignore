@@ -10,3 +10,11 @@ events.json
 predictions.json
 resolved.json
 *.key
+
+# Eval output files
+predictions_*.json
+scored_*.json
+score_log_*.log
+live_predictions_*.json
+live_results_*.json
+eval_results.json
