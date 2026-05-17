@@ -7,6 +7,7 @@ import re
 from openai import AsyncOpenAI
 
 from ..fallback import binary_from_kalshi_prior, multi_from_kalshi_prior
+from .judge import judge_binary, judge_multi
 
 SYSTEM_PROMPT = """You are a world-class superforecaster with deep expertise in calibrated probability estimation.
 
@@ -222,14 +223,34 @@ async def run_ensemble(
         model_b: text_b,
     }
 
+    # Evidence summary for the judge: Kalshi prior + category-specific data
+    if isinstance(kalshi_prior, float):
+        prior_line = f"Kalshi market price: {kalshi_prior:.1%} YES"
+    elif isinstance(kalshi_prior, dict):
+        prior_line = "Kalshi prices: " + ", ".join(f"{k}: {v:.1%}" for k, v in kalshi_prior.items())
+    else:
+        prior_line = "Kalshi price: unavailable"
+    evidence_summary = f"{prior_line}\n\n{category_info}"
+
     # --- Binary ---
     if event_type == "binary":
         p_a = float(res_a["p_yes"]) if res_a and "p_yes" in res_a else None
         p_b = float(res_b["p_yes"]) if res_b and "p_yes" in res_b else None
 
+        judge_critique = ""
+        judge_confidence = ""
+
         if p_a is not None and p_b is not None:
-            p_final = _geo_mean_binary(p_a, p_b)
-            p_final = _extremize(p_final)
+            judge_result = await judge_binary(
+                event, evidence_summary, p_a, text_a, p_b, text_b
+            )
+            if judge_result:
+                p_final = judge_result["final_p_yes"]
+                judge_critique = judge_result["critique"]
+                judge_confidence = judge_result["confidence"]
+            else:
+                # Judge failed — fall back to geometric mean + extremize
+                p_final = _extremize(_geo_mean_binary(p_a, p_b))
         elif p_a is not None:
             p_final = p_a
         elif p_b is not None:
@@ -237,15 +258,32 @@ async def run_ensemble(
         else:
             p_final = binary_from_kalshi_prior(kalshi_prior)
 
-        return {"p_yes": p_final, "evidence_quality": evidence_quality,
-                "rationale": rationale, "model_reasoning": model_reasoning}
+        return {
+            "p_yes": p_final,
+            "evidence_quality": evidence_quality,
+            "rationale": rationale,
+            "model_reasoning": model_reasoning,
+            "judge_critique": judge_critique,
+            "judge_confidence": judge_confidence,
+        }
 
     # --- Multi / Numeric ---
     probs_a = _extract_multi_probs(res_a, outcomes)
     probs_b = _extract_multi_probs(res_b, outcomes)
 
+    judge_critique = ""
+    judge_confidence = ""
+
     if probs_a and probs_b:
-        combined = _geo_mean_multi(probs_a, probs_b, outcomes, multi_label)
+        judge_result = await judge_multi(
+            event, evidence_summary, probs_a, text_a, probs_b, text_b, outcomes, multi_label
+        )
+        if judge_result:
+            combined = judge_result["final_probabilities"]
+            judge_critique = judge_result["critique"]
+            judge_confidence = judge_result["confidence"]
+        else:
+            combined = _geo_mean_multi(probs_a, probs_b, outcomes, multi_label)
     elif probs_a:
         combined = probs_a
     elif probs_b:
@@ -261,5 +299,11 @@ async def run_ensemble(
         total = sum(combined.values())
         combined = {k: v / total for k, v in combined.items()}
 
-    return {"probabilities": combined, "evidence_quality": evidence_quality,
-            "rationale": rationale, "model_reasoning": model_reasoning}
+    return {
+        "probabilities": combined,
+        "evidence_quality": evidence_quality,
+        "rationale": rationale,
+        "model_reasoning": model_reasoning,
+        "judge_critique": judge_critique,
+        "judge_confidence": judge_confidence,
+    }
