@@ -8,7 +8,10 @@ from pydantic import BaseModel
 
 load_dotenv()
 
+from .event_classifier import classify
+from .fallback import market_fallback
 from .pipeline import predict as run_pipeline
+from .response_utils import truncate_rationale
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,34 +32,37 @@ class EventRequest(BaseModel):
     resolved_outcome: Any = None
 
 
-def _fallback(outcomes: list[str]) -> dict:
-    if len(outcomes) <= 2:
-        return {"p_yes": 0.5, "rationale": "Internal error — returning neutral fallback."}
-    n = len(outcomes)
-    return {
-        "probabilities": [
-            {"market": o, "probability": round(1 / n, 4)} for o in outcomes
-        ],
-        "rationale": "Internal error — returning uniform fallback.",
-    }
-
-
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
+def _finalize_response(event: dict, result: dict) -> dict:
+    result["rationale"] = truncate_rationale(result.get("rationale", ""))
+    classified = classify(event)
+    if "probabilities" in result:
+        total = sum(p["probability"] for p in result["probabilities"])
+        logger.info(
+            "multi_label=%s sum_probs=%.3f ticker=%s",
+            classified.is_multi_label,
+            total,
+            event.get("market_ticker", ""),
+        )
+    return result
+
+
 @app.post("/predict")
 async def predict(event: EventRequest):
     logger.info("Predicting: %s — %s", event.market_ticker, event.title)
-    outcomes = event.outcomes or []
+    payload = event.model_dump()
     try:
-        result = await run_pipeline(event.model_dump())
+        result = await run_pipeline(payload)
         logger.info("Done: %s → %s", event.market_ticker, result)
-        return result
+        return _finalize_response(payload, result)
     except Exception as exc:
         logger.error("Error on %s: %s", event.market_ticker, exc)
-        return _fallback(outcomes)
+        result = await market_fallback(payload)
+        return _finalize_response(payload, result)
 
 
 def main():

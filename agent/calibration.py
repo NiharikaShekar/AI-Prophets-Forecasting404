@@ -42,17 +42,21 @@ def calibrate_multi(
     close_time: str,
     evidence_quality: str,
     outcomes: list[str],
+    multi_label: bool = False,
 ) -> dict[str, float]:
     hours = _hours_to_close(close_time)
     shrink = _shrink_factor(hours, evidence_quality)
     n = len(outcomes)
+    default_anchor = 0.5 if multi_label else 1 / n
 
     calibrated: dict[str, float] = {}
     for o in outcomes:
-        p_raw = probs.get(o, 1 / n)
-        anchor = (priors or {}).get(o, 1 / n)
-        calibrated[o] = max(0.01, (1 - shrink) * p_raw + shrink * anchor)
+        p_raw = probs.get(o, default_anchor)
+        anchor = (priors or {}).get(o, default_anchor)
+        calibrated[o] = max(0.01, min(0.99, (1 - shrink) * p_raw + shrink * anchor))
 
-    # Renormalize to sum = 1.0
+    if multi_label:
+        return calibrated
+
     total = sum(calibrated.values())
     return {k: v / total for k, v in calibrated.items()}

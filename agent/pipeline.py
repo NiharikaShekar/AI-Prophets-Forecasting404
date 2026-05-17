@@ -21,9 +21,11 @@ async def predict(event: dict) -> dict:
     title = event.get("title", "")
 
     # ── Stage 1: Parallel evidence gathering ─────────────────────────────
+    normalize_prior = not classified.is_multi_label
+
     if classified.type == EventType.NUMERIC:
         kalshi_prior, news, stats, category_info = await asyncio.gather(
-            get_multi_prior(ticker, outcomes),
+            get_multi_prior(ticker, outcomes, normalize=normalize_prior),
             search_recent_news(title),
             search_stats_history(title),
             search_numeric(title),
@@ -37,7 +39,7 @@ async def predict(event: dict) -> dict:
         )
     else:  # MULTI
         kalshi_prior, news, stats, category_info = await asyncio.gather(
-            get_multi_prior(ticker, outcomes),
+            get_multi_prior(ticker, outcomes, normalize=normalize_prior),
             search_recent_news(title),
             search_stats_history(title),
             search_category(title, category),
@@ -51,6 +53,7 @@ async def predict(event: dict) -> dict:
         stats=stats,
         category_info=category_info,
         event_type=classified.type.value,
+        multi_label=classified.is_multi_label,
     )
 
     evidence_quality = result.get("evidence_quality", "Moderate")
@@ -65,7 +68,14 @@ async def predict(event: dict) -> dict:
     else:
         probs_raw = result.get("probabilities", {o: 1 / len(outcomes) for o in outcomes})
         prior_dict = kalshi_prior if isinstance(kalshi_prior, dict) else None
-        probs_final = calibrate_multi(probs_raw, prior_dict, close_time, evidence_quality, outcomes)
+        probs_final = calibrate_multi(
+            probs_raw,
+            prior_dict,
+            close_time,
+            evidence_quality,
+            outcomes,
+            multi_label=classified.is_multi_label,
+        )
         return {
             "probabilities": [
                 {"market": o, "probability": round(probs_final[o], 4)}

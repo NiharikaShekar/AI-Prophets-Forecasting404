@@ -44,7 +44,12 @@ async def get_binary_prior(market_ticker: str) -> float | None:
             return None
 
 
-async def get_multi_prior(event_ticker: str, outcomes: list[str]) -> dict[str, float] | None:
+async def get_multi_prior(
+    event_ticker: str,
+    outcomes: list[str],
+    *,
+    normalize: bool = True,
+) -> dict[str, float] | None:
     url = f"{KALSHI_BASE}/markets"
     async with httpx.AsyncClient(timeout=8.0) as client:
         try:
@@ -72,7 +77,9 @@ async def get_multi_prior(event_ticker: str, outcomes: list[str]) -> dict[str, f
             if len(result) < 2:
                 return None
 
-            # Normalize — Kalshi multi-outcome markets don't sum to 1
+            if not normalize:
+                return result
+
             total = sum(result.values())
             return {k: v / total for k, v in result.items()}
         except Exception:

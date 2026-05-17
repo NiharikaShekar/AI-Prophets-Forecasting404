@@ -6,6 +6,8 @@ import re
 
 from openai import AsyncOpenAI
 
+from ..fallback import binary_from_kalshi_prior, multi_from_kalshi_prior
+
 SYSTEM_PROMPT = """You are a world-class superforecaster with deep expertise in calibrated probability estimation.
 
 You MUST follow this exact 7-step reasoning structure:
@@ -15,7 +17,7 @@ You MUST follow this exact 7-step reasoning structure:
 3. ARGUE FOR: The 3 strongest arguments supporting YES / the primary outcome. Weight by recency and source quality.
 4. ARGUE AGAINST: The 3 strongest arguments against YES / the primary outcome. Same weighting criteria.
 5. SYNTHESIZE: Weigh FOR vs AGAINST. How much does recent evidence move you from the base rate?
-6. CALIBRATE: Avoid overconfidence. Only go extreme (>0.85 or <0.15) with very strong, recent, multi-source evidence. When uncertain, stay closer to 0.5 for binary or 1/N for multi-outcome.
+6. CALIBRATE: Avoid overconfidence. Only go extreme (>0.85 or <0.15) with very strong, recent, multi-source evidence. When uncertain, stay closer to 0.5 for binary, 1/N for winner-take-all multi-outcome, or moderate per-outcome marginals for multi-label.
 7. ESTIMATE: State your final probability.
 
 Then output ONLY valid JSON — no markdown, no extra text."""
@@ -27,6 +29,7 @@ def _build_prompt(
     news: str,
     stats: str,
     category_info: str,
+    multi_label: bool = False,
 ) -> str:
     outcomes = event.get("outcomes") or []
     n = len(outcomes)
@@ -43,12 +46,22 @@ def _build_prompt(
         fmt = '{"p_yes": <float 0.01-0.99>, "evidence_quality": "Strong|Moderate|Weak", "rationale": "<your full reasoning>"}'
     else:
         outcome_list = ", ".join(f'"{o}"' for o in outcomes)
-        fmt = (
-            '{"probabilities": [{"market": "<outcome>", "probability": <float>}, ...], '
-            '"evidence_quality": "Strong|Moderate|Weak", "rationale": "<your full reasoning>"}\n'
-            f"Include ALL outcomes: {outcome_list}\n"
-            "Probabilities MUST sum to 1.0. Each must be between 0.01 and 0.99."
-        )
+        if multi_label:
+            fmt = (
+                '{"probabilities": [{"market": "<outcome>", "probability": <float>}, ...], '
+                '"evidence_quality": "Strong|Moderate|Weak", "rationale": "<your full reasoning>"}\n'
+                f"Include ALL outcomes: {outcome_list}\n"
+                "Each probability is P(this outcome resolves Yes) as an independent marginal. "
+                "Several outcomes may be likely. Do NOT force probabilities to sum to 1.0. "
+                "Each must be between 0.01 and 0.99."
+            )
+        else:
+            fmt = (
+                '{"probabilities": [{"market": "<outcome>", "probability": <float>}, ...], '
+                '"evidence_quality": "Strong|Moderate|Weak", "rationale": "<your full reasoning>"}\n'
+                f"Include ALL outcomes: {outcome_list}\n"
+                "Probabilities MUST sum to 1.0. Each must be between 0.01 and 0.99."
+            )
 
     return f"""EVENT TO FORECAST
 Title: {event.get("title")}
@@ -95,16 +108,24 @@ def _geo_mean_binary(p_a: float, p_b: float) -> float:
     return combined / (1 + combined)
 
 
-def _geo_mean_multi(probs_a: dict, probs_b: dict, outcomes: list[str]) -> dict[str, float]:
+def _geo_mean_multi(
+    probs_a: dict,
+    probs_b: dict,
+    outcomes: list[str],
+    multi_label: bool = False,
+) -> dict[str, float]:
     result: dict[str, float] = {}
     n = len(outcomes)
+    default = 0.5 if multi_label else 1 / n
     for o in outcomes:
-        p_a = max(0.001, min(0.999, probs_a.get(o, 1 / n)))
-        p_b = max(0.001, min(0.999, probs_b.get(o, 1 / n)))
+        p_a = max(0.001, min(0.999, probs_a.get(o, default)))
+        p_b = max(0.001, min(0.999, probs_b.get(o, default)))
         odds_a = p_a / (1 - p_a)
         odds_b = p_b / (1 - p_b)
         combined = math.sqrt(odds_a * odds_b)
-        result[o] = combined / (1 + combined)
+        result[o] = max(0.01, min(0.99, combined / (1 + combined)))
+    if multi_label:
+        return result
     total = sum(result.values())
     return {k: v / total for k, v in result.items()}
 
@@ -170,13 +191,14 @@ async def run_ensemble(
     stats: str,
     category_info: str,
     event_type: str,
+    multi_label: bool = False,
 ) -> dict:
     model_a = os.environ.get("MODEL_A", "deepseek/deepseek-r1")
     model_b = os.environ.get("MODEL_B", "anthropic/claude-sonnet-4-5")
     outcomes = event.get("outcomes") or []
     n = len(outcomes)
 
-    prompt = _build_prompt(event, kalshi_prior, news, stats, category_info)
+    prompt = _build_prompt(event, kalshi_prior, news, stats, category_info, multi_label)
 
     # Call both models in parallel
     raw_a, raw_b = await asyncio.gather(
@@ -213,7 +235,7 @@ async def run_ensemble(
         elif p_b is not None:
             p_final = p_b
         else:
-            p_final = 0.5
+            p_final = binary_from_kalshi_prior(kalshi_prior)
 
         return {"p_yes": p_final, "evidence_quality": evidence_quality,
                 "rationale": rationale, "model_reasoning": model_reasoning}
@@ -223,20 +245,21 @@ async def run_ensemble(
     probs_b = _extract_multi_probs(res_b, outcomes)
 
     if probs_a and probs_b:
-        combined = _geo_mean_multi(probs_a, probs_b, outcomes)
+        combined = _geo_mean_multi(probs_a, probs_b, outcomes, multi_label)
     elif probs_a:
         combined = probs_a
     elif probs_b:
         combined = probs_b
     else:
-        combined = {o: 1 / n for o in outcomes}
+        combined = multi_from_kalshi_prior(kalshi_prior, outcomes, multi_label)
 
-    # Ensure all outcomes present, clamp, renormalize
+    default = 0.5 if multi_label else 0.01
     for o in outcomes:
-        combined.setdefault(o, 0.01)
-    combined = {k: max(0.01, v) for k, v in combined.items()}
-    total = sum(combined.values())
-    combined = {k: v / total for k, v in combined.items()}
+        combined.setdefault(o, default)
+    combined = {k: max(0.01, min(0.99, v)) for k, v in combined.items()}
+    if not multi_label:
+        total = sum(combined.values())
+        combined = {k: v / total for k, v in combined.items()}
 
     return {"probabilities": combined, "evidence_quality": evidence_quality,
             "rationale": rationale, "model_reasoning": model_reasoning}
