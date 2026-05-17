@@ -38,13 +38,15 @@ def _build_prompt(
     if kalshi_prior is None:
         prior_str = "Market price: Not available — use base rates as anchor."
     elif isinstance(kalshi_prior, float):
-        prior_str = f"Current Kalshi market price (crowd wisdom): {kalshi_prior:.2%} chance of YES"
+        yes_label = outcomes[0] if outcomes else "YES"
+        prior_str = f"Current Kalshi market price (crowd wisdom): {kalshi_prior:.2%} chance of {yes_label}"
     else:
         lines = [f"  {k}: {v:.2%}" for k, v in kalshi_prior.items()]
         prior_str = "Current Kalshi market prices (crowd wisdom):\n" + "\n".join(lines)
 
     if n <= 2:
-        fmt = '{"p_yes": <float 0.01-0.99>, "evidence_quality": "Strong|Moderate|Weak", "rationale": "<your full reasoning>"}'
+        yes_label = outcomes[0] if outcomes else "YES"
+        fmt = f'{{"p_yes": <float 0.01-0.99 — probability that "{yes_label}" is the outcome>, "evidence_quality": "Strong|Moderate|Weak", "rationale": "<your full reasoning>"}}'
     else:
         outcome_list = ", ".join(f'"{o}"' for o in outcomes)
         if multi_label:
