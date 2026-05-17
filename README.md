@@ -1,8 +1,6 @@
-# Prophet Hacks 2026 — AI Forecasting Agent
+# AI Forecasting Agent
 
-> Built in 32 hours at Prophet Hacks 2026 by **Team AI-Prophets-Forecasting404**
-
-A deliberative multi-agent forecasting system that predicts Kalshi prediction market outcomes by combining domain-specific evidence gathering, independent dual-model reasoning, and a judge LLM that arbitrates the final probability.
+A deliberative multi-agent system that predicts Kalshi prediction market outcomes by combining domain-specific evidence gathering, independent dual-model reasoning, and a judge LLM that arbitrates the final probability.
 
 ---
 
@@ -10,7 +8,7 @@ A deliberative multi-agent forecasting system that predicts Kalshi prediction ma
 
 Kalshi prediction markets are efficient — the crowd price is the baseline. Every participant sees the same market price. Beating it requires something the crowd doesn't have: better evidence, more rigorous reasoning, and calibrated output that avoids the biases humans and single-model systems share.
 
-The metric is **Brier Score** — `(predicted_probability − actual_outcome)²`. Lower is better. A perfect predictor scores 0. A naive 50/50 guess scores ~0.25. The Kalshi crowd baseline sits around 0.168.
+The metric is **Brier Score** — `(predicted_probability − actual_outcome)²`. Lower is better. A perfect predictor scores 0. A naive 50/50 guess scores ~0.25.
 
 ---
 
