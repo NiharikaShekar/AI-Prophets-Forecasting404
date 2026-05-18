@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Any
 
@@ -76,8 +77,12 @@ async def predict(event: EventRequest):
     logger.info("Predicting: %s — %s", event.market_ticker, event.title)
     payload = event.model_dump()
     try:
-        result = await run_pipeline(payload)
+        result = await asyncio.wait_for(run_pipeline(payload), timeout=580)
         logger.info("Done: %s → %s", event.market_ticker, result)
+        return _finalize_response(payload, result)
+    except asyncio.TimeoutError:
+        logger.warning("Pipeline timeout on %s — returning fallback", event.market_ticker)
+        result = await market_fallback(payload)
         return _finalize_response(payload, result)
     except Exception as exc:
         logger.error("Error on %s: %s", event.market_ticker, exc)
