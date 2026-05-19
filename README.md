@@ -2,7 +2,7 @@
 
 A deliberative multi-agent system that predicts Kalshi prediction market outcomes by combining domain-specific evidence gathering, independent dual-model reasoning, and a judge LLM that arbitrates the final probability.
 
-Demo: https://youtu.be/i8Kv7EjxVyQ 
+###Demo: https://youtu.be/i8Kv7EjxVyQ 
 ---
 
 ## The Problem
